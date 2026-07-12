@@ -1,38 +1,15 @@
-buildscript {
-    repositories {
-        maven { url = 'https://maven.fabricmc.net/' }
-        gradlePluginPortal()
-        mavenCentral()
-    }
-    dependencies {
-        classpath "net.fabricmc:fabric-loom:${project.loom_version}"
-        classpath "com.google.code.gson:gson:2.10.1"
-    }
-    configurations.classpath {
-        resolutionStrategy.force "com.google.code.gson:gson:2.10.1"
-    }
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.141'
+    id 'idea'
 }
 
-apply plugin: 'fabric-loom'
-apply plugin: 'maven-publish'
-
-version = project.mod_version
-group = project.mod_group_id
+version = mod_version
+group = mod_group_id
 
 base {
-    archivesName = project.mod_id
-}
-
-repositories {
-    maven { url = 'https://maven.fabricmc.net/' }
-    mavenCentral()
-}
-
-dependencies {
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    archivesName = mod_id
 }
 
 java {
@@ -40,21 +17,45 @@ java {
     withSourcesJar()
 }
 
-processResources {
-    inputs.property "version", project.version
-    inputs.property "minecraft_version", project.minecraft_version
-    inputs.property "loader_version", project.loader_version
-    inputs.property "fabric_api_version", project.fabric_api_version
-    inputs.property "mod_id", project.mod_id
+neoForge {
+    version = neo_version
 
-    filesMatching("fabric.mod.json") {
-        expand(
-                version: project.version,
-                minecraft_version: project.minecraft_version,
-                loader_version: project.loader_version,
-                fabric_api_version: project.fabric_api_version,
-                mod_id: project.mod_id
-        )
+    runs {
+        client {
+            client()
+        }
+        server {
+            server()
+            programArgument '--nogui'
+        }
+        configureEach {
+            logLevel = org.slf4j.event.Level.INFO
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+processResources {
+    def replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+    filesMatching(['META-INF/neoforge.mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties
     }
 }
 
@@ -64,15 +65,22 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 jar {
-    from("LICENSE.txt") {
-        rename { "${it}_${project.mod_id}" }
+    from('LICENSE.txt') {
+        rename { "${it}_${mod_id}" }
     }
 }
 
 publishing {
     publications {
-        create("mavenJava", MavenPublication) {
+        register('mavenJava', MavenPublication) {
             from components.java
         }
+    }
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
     }
 }

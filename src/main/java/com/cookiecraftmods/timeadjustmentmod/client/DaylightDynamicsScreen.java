@@ -2,13 +2,13 @@ package com.cookiecraftmods.timeadjustmentmod.client;
 
 import com.cookiecraftmods.timeadjustmentmod.DaylightDynamicsConfig;
 import com.cookiecraftmods.timeadjustmentmod.network.DaylightDynamicsNetwork;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.CyclingButtonWidget;
-import net.minecraft.client.gui.widget.SliderWidget;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.MathHelper;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.AbstractSliderButton;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.CycleButton;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+import net.minecraft.util.Mth;
 
 public class DaylightDynamicsScreen extends Screen {
     private static final int PANEL_WIDTH = 220;
@@ -17,14 +17,14 @@ public class DaylightDynamicsScreen extends Screen {
     private static final int SECTION_SPACING = 10;
 
     private DaylightDynamicsConfig workingCopy;
-    private CyclingButtonWidget<DaylightDynamicsConfig.Mode> modeButton;
-    private ButtonWidget runningButton;
+    private CycleButton<DaylightDynamicsConfig.Mode> modeButton;
+    private Button runningButton;
     private TimeSlider hoursSlider;
     private TimeSlider minutesSlider;
-    private ButtonWidget applyButton;
+    private Button applyButton;
 
     public DaylightDynamicsScreen(DaylightDynamicsConfig config) {
-        super(Text.literal("Daylight Dynamics"));
+        super(Component.literal("Daylight Dynamics"));
         this.workingCopy = config.copy().sanitize();
     }
 
@@ -32,15 +32,14 @@ public class DaylightDynamicsScreen extends Screen {
     protected void init() {
         int left = this.width / 2 - (PANEL_WIDTH / 2);
         int top = this.height / 2 - 70;
-        int controlsTop = top + this.textRenderer.fontHeight + SECTION_SPACING;
+        int controlsTop = top + this.font.lineHeight + SECTION_SPACING;
         int customMinutes = workingCopy.customDayLengthMinutes();
         int hours = customMinutes / 60;
         int minutes = customMinutes % 60;
 
-        modeButton = addDrawableChild(CyclingButtonWidget.builder(this::modeLabel)
-                .values(DaylightDynamicsConfig.Mode.values())
-                .initially(workingCopy.mode())
-                .build(left, controlsTop, PANEL_WIDTH, BUTTON_HEIGHT, Text.literal("Mode"),
+        modeButton = addRenderableWidget(CycleButton.builder(this::modeLabel, workingCopy.mode())
+                .withValues(DaylightDynamicsConfig.Mode.values())
+                .create(left, controlsTop, PANEL_WIDTH, BUTTON_HEIGHT, Component.literal("Mode"),
                         (button, value) -> {
                             workingCopy = new DaylightDynamicsConfig(
                                     workingCopy.running(),
@@ -51,17 +50,17 @@ public class DaylightDynamicsScreen extends Screen {
                             updateWidgetState();
                         }));
 
-        runningButton = addDrawableChild(ButtonWidget.builder(Text.empty(), button -> {
+        runningButton = addRenderableWidget(Button.builder(Component.empty(), button -> {
                     workingCopy = workingCopy.withRunning(!workingCopy.running());
                     updateWidgetState();
                 })
-                .dimensions(left, controlsTop + BUTTON_HEIGHT + ROW_SPACING, PANEL_WIDTH, BUTTON_HEIGHT)
+                .bounds(left, controlsTop + BUTTON_HEIGHT + ROW_SPACING, PANEL_WIDTH, BUTTON_HEIGHT)
                 .build());
 
-        hoursSlider = addDrawableChild(new TimeSlider(left, controlsTop + ((BUTTON_HEIGHT + ROW_SPACING) * 2), PANEL_WIDTH, BUTTON_HEIGHT, 24, hours, "Hours"));
-        minutesSlider = addDrawableChild(new TimeSlider(left, controlsTop + ((BUTTON_HEIGHT + ROW_SPACING) * 3), PANEL_WIDTH, BUTTON_HEIGHT, 59, minutes, "Minutes"));
+        hoursSlider = addRenderableWidget(new TimeSlider(left, controlsTop + ((BUTTON_HEIGHT + ROW_SPACING) * 2), PANEL_WIDTH, BUTTON_HEIGHT, 24, hours, "Hours"));
+        minutesSlider = addRenderableWidget(new TimeSlider(left, controlsTop + ((BUTTON_HEIGHT + ROW_SPACING) * 3), PANEL_WIDTH, BUTTON_HEIGHT, 59, minutes, "Minutes"));
 
-        applyButton = addDrawableChild(ButtonWidget.builder(Text.literal("Apply"), button -> {
+        applyButton = addRenderableWidget(Button.builder(Component.literal("Apply"), button -> {
                     DaylightDynamicsConfig updated = new DaylightDynamicsConfig(
                             workingCopy.running(),
                             workingCopy.mode(),
@@ -71,11 +70,11 @@ public class DaylightDynamicsScreen extends Screen {
                     workingCopy = updated;
                     DaylightDynamicsNetwork.sendUpdate(updated);
                 })
-                .dimensions(left, controlsTop + ((BUTTON_HEIGHT + ROW_SPACING) * 4) + SECTION_SPACING, 105, BUTTON_HEIGHT)
+                .bounds(left, controlsTop + ((BUTTON_HEIGHT + ROW_SPACING) * 4) + SECTION_SPACING, 105, BUTTON_HEIGHT)
                 .build());
 
-        addDrawableChild(ButtonWidget.builder(Text.literal("Close"), button -> close())
-                .dimensions(left + 115, controlsTop + ((BUTTON_HEIGHT + ROW_SPACING) * 4) + SECTION_SPACING, 105, BUTTON_HEIGHT)
+        addRenderableWidget(Button.builder(Component.literal("Close"), button -> onClose())
+                .bounds(left + 115, controlsTop + ((BUTTON_HEIGHT + ROW_SPACING) * 4) + SECTION_SPACING, 105, BUTTON_HEIGHT)
                 .build());
 
         updateWidgetState();
@@ -94,18 +93,17 @@ public class DaylightDynamicsScreen extends Screen {
     }
 
     @Override
-    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        renderBackground(context, mouseX, mouseY, delta);
+    public void render(GuiGraphics context, int mouseX, int mouseY, float delta) {
         super.render(context, mouseX, mouseY, delta);
 
         int centerX = this.width / 2;
         int top = this.height / 2 - 70;
-        context.drawCenteredTextWithShadow(this.textRenderer, this.title, centerX, top, 0xFFFFFF);
+        context.drawCenteredString(this.font, this.title, centerX, top, 0xFFFFFF);
     }
 
     private void updateWidgetState() {
         if (runningButton != null) {
-            runningButton.setMessage(Text.literal(workingCopy.running() ? "Enable mod: ON" : "Enable mod: OFF"));
+            runningButton.setMessage(Component.literal(workingCopy.running() ? "Enable mod: ON" : "Enable mod: OFF"));
         }
 
         boolean customMode = workingCopy.mode() == DaylightDynamicsConfig.Mode.CUSTOM;
@@ -120,19 +118,19 @@ public class DaylightDynamicsScreen extends Screen {
         }
     }
 
-    private Text modeLabel(DaylightDynamicsConfig.Mode mode) {
+    private Component modeLabel(DaylightDynamicsConfig.Mode mode) {
         if (mode == DaylightDynamicsConfig.Mode.TIMEZONE) {
-            return Text.literal("Timezone (" + workingCopy.timezoneId() + ")");
+            return Component.literal("Timezone (" + workingCopy.timezoneId() + ")");
         }
-        return Text.literal("Custom length");
+        return Component.literal("Custom length");
     }
 
-    private static final class TimeSlider extends SliderWidget {
+    private static final class TimeSlider extends AbstractSliderButton {
         private final int maxValue;
         private final String prefix;
 
         private TimeSlider(int x, int y, int width, int height, int maxValue, int initialValue, String prefix) {
-            super(x, y, width, height, Text.empty(), initialValue / (double) maxValue);
+            super(x, y, width, height, Component.empty(), initialValue / (double) maxValue);
             this.maxValue = maxValue;
             this.prefix = prefix;
             updateMessage();
@@ -140,7 +138,7 @@ public class DaylightDynamicsScreen extends Screen {
 
         @Override
         protected void updateMessage() {
-            setMessage(Text.literal(prefix + ": " + intValue()));
+            setMessage(Component.literal(prefix + ": " + intValue()));
         }
 
         @Override
@@ -148,11 +146,11 @@ public class DaylightDynamicsScreen extends Screen {
         }
 
         private int intValue() {
-            return MathHelper.clamp((int) Math.round(this.value * maxValue), 0, maxValue);
+            return Mth.clamp((int) Math.round(this.value * maxValue), 0, maxValue);
         }
 
         private void setValue(int rawValue) {
-            this.value = MathHelper.clamp(rawValue / (double) maxValue, 0.0D, 1.0D);
+            this.value = Mth.clamp(rawValue / (double) maxValue, 0.0D, 1.0D);
             updateMessage();
         }
     }

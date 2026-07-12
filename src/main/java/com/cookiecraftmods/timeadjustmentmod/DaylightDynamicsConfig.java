@@ -4,8 +4,8 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.util.WorldSavePath;
-import net.minecraft.world.GameRules;
+import net.minecraft.world.level.gamerules.GameRules;
+import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -29,22 +29,22 @@ public record DaylightDynamicsConfig(boolean running, Mode mode, int customDayLe
 
     public static DaylightDynamicsConfig load(MinecraftServer server) {
         Path path = configPath(server);
-        DaylightDynamicsConfig fallback = DaylightDynamicsGameRules.read(server.getGameRules());
+        DaylightDynamicsConfig fallback = DaylightDynamicsGameRules.read(server.overworld().getGameRules());
 
         if (Files.exists(path)) {
             try (Reader reader = Files.newBufferedReader(path)) {
                 DaylightDynamicsConfig parsed = GSON.fromJson(reader, DaylightDynamicsConfig.class);
                 DaylightDynamicsConfig config = parsed == null ? fallback : parsed.sanitize();
-                DaylightDynamicsGameRules.write(server.getGameRules(), config, server);
+                DaylightDynamicsGameRules.write(server.overworld().getGameRules(), config, server);
                 return config;
             } catch (IOException | JsonSyntaxException ex) {
-                DaylightDynamicsGameRules.write(server.getGameRules(), fallback, server);
+                DaylightDynamicsGameRules.write(server.overworld().getGameRules(), fallback, server);
                 return fallback;
             }
         }
 
         fallback.save(server);
-        DaylightDynamicsGameRules.write(server.getGameRules(), fallback, server);
+        DaylightDynamicsGameRules.write(server.overworld().getGameRules(), fallback, server);
         return fallback;
     }
 
@@ -52,7 +52,7 @@ public record DaylightDynamicsConfig(boolean running, Mode mode, int customDayLe
         Path path = configPath(server);
         try {
             Files.createDirectories(path.getParent());
-            DaylightDynamicsGameRules.write(server.getGameRules(), this, server);
+            DaylightDynamicsGameRules.write(server.overworld().getGameRules(), this, server);
             try (Writer writer = Files.newBufferedWriter(path)) {
                 GSON.toJson(sanitize(), writer);
             }
@@ -92,7 +92,7 @@ public record DaylightDynamicsConfig(boolean running, Mode mode, int customDayLe
     }
 
     private static Path configPath(MinecraftServer server) {
-        return server.getSavePath(WorldSavePath.ROOT)
+        return server.getWorldPath(LevelResource.ROOT)
                 .resolve("serverconfig")
                 .resolve(FILE_NAME);
     }

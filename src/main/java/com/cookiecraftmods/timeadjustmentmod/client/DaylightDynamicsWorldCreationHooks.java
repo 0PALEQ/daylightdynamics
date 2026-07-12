@@ -1,80 +1,54 @@
 package com.cookiecraftmods.timeadjustmentmod.client;
 
 import com.cookiecraftmods.timeadjustmentmod.DaylightDynamicsConfig;
-import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.fabricmc.fabric.api.client.screen.v1.Screens;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.world.CreateWorldScreen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.ClickableWidget;
-import net.minecraft.text.Text;
+import com.cookiecraftmods.timeadjustmentmod.DaylightDynamicsMod;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.worldselection.CreateWorldScreen;
+import net.minecraft.network.chat.Component;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ScreenEvent;
 
+@EventBusSubscriber(modid = DaylightDynamicsMod.MOD_ID, value = Dist.CLIENT)
 public final class DaylightDynamicsWorldCreationHooks {
     private DaylightDynamicsWorldCreationHooks() {
     }
 
-    public static void initialize() {
-        ScreenEvents.AFTER_INIT.register(DaylightDynamicsWorldCreationHooks::onScreenInit);
-    }
-
-    private static void onScreenInit(MinecraftClient client, Screen screen, int scaledWidth, int scaledHeight) {
-        if (!(screen instanceof CreateWorldScreen createWorldScreen)) {
+    @SubscribeEvent
+    public static void onScreenInit(ScreenEvent.Init.Post event) {
+        if (!(event.getScreen() instanceof CreateWorldScreen screen)) {
             return;
         }
 
-        DaylightDynamicsConfig config = DaylightDynamicsConfig.fromGameRules(createWorldScreen.getWorldCreator().getGameRules());
-
-        ClickableWidget existingButton = null;
-        for (ClickableWidget widget : Screens.getButtons(screen)) {
-            String text = widget.getMessage().getString();
-            if (!text.startsWith("Daylight Dynamics: ")) {
-                continue;
-            }
-
-            if (existingButton == null) {
-                existingButton = widget;
-                widget.setMessage(worldCreationButtonLabel(config));
-            }
-        }
-
-        if (existingButton != null) {
-            ClickableWidget preservedButton = existingButton;
-            Screens.getButtons(screen).removeIf(widget ->
-                    widget != preservedButton && widget.getMessage().getString().startsWith("Daylight Dynamics: "));
-            return;
-        }
-
-        int x = (scaledWidth / 2) - 105;
-        int y = (scaledHeight / 2) + 10;
-        int buttonWidth = 210;
+        DaylightDynamicsConfig config = DaylightDynamicsConfig.fromGameRules(screen.getUiState().getGameRules());
+        int x = screen.width / 2 - 105;
+        int y = screen.height / 2 + 10;
+        int width = 210;
         int maxRowY = Integer.MIN_VALUE;
 
-        for (ClickableWidget widget : Screens.getButtons(screen)) {
-            if (widget.getWidth() != 210) {
+        for (var listener : event.getListenersList()) {
+            if (!(listener instanceof AbstractWidget widget) || widget.getWidth() != 210) {
                 continue;
             }
-
-            int widgetCenter = widget.getX() + (widget.getWidth() / 2);
-            if (Math.abs(widgetCenter - (scaledWidth / 2)) > 4) {
-                continue;
-            }
-
-            if (widget.getY() > maxRowY) {
+            int widgetCenter = widget.getX() + widget.getWidth() / 2;
+            if (Math.abs(widgetCenter - screen.width / 2) <= 4 && widget.getY() > maxRowY) {
                 maxRowY = widget.getY();
                 x = widget.getX();
                 y = widget.getY() + 28;
-                buttonWidth = widget.getWidth();
+                width = widget.getWidth();
             }
         }
 
-        Screens.getButtons(screen).add(ButtonWidget.builder(worldCreationButtonLabel(config), button ->
-                        client.setScreen(new DaylightDynamicsWorldCreationScreen(createWorldScreen)))
-                .dimensions(x, y, buttonWidth, 20)
+        event.addListener(Button.builder(worldCreationButtonLabel(config), button ->
+                        Minecraft.getInstance().setScreen(new DaylightDynamicsWorldCreationScreen(screen)))
+                .bounds(x, y, width, 20)
                 .build());
     }
 
-    private static Text worldCreationButtonLabel(DaylightDynamicsConfig config) {
-        return Text.literal(config.running() ? "Daylight Dynamics: ON" : "Daylight Dynamics: OFF");
+    private static Component worldCreationButtonLabel(DaylightDynamicsConfig config) {
+        return Component.literal(config.running() ? "Daylight Dynamics: ON" : "Daylight Dynamics: OFF");
     }
 }

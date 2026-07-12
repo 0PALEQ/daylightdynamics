@@ -2,10 +2,10 @@ package com.cookiecraftmods.timeadjustmentmod;
 
 import com.cookiecraftmods.timeadjustmentmod.network.DaylightDynamicsNetwork;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.world.GameRules;
-import net.minecraft.world.World;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.gamerules.GameRules;
 
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -17,12 +17,16 @@ public class DaylightDynamicsState {
     private DaylightDynamicsConfig config = DaylightDynamicsConfig.defaults();
     private long lastTickNanos;
     private double customTickAccumulator;
+    private boolean controlsDaylightRule;
+    private boolean previousDaylightRule;
 
     public void load(MinecraftServer server) {
         this.server = server;
         this.config = DaylightDynamicsConfig.load(server);
         this.lastTickNanos = 0L;
         this.customTickAccumulator = 0.0D;
+        this.controlsDaylightRule = false;
+        this.previousDaylightRule = server.overworld().getGameRules().get(GameRules.ADVANCE_TIME);
     }
 
     public void unload() {
@@ -30,6 +34,8 @@ public class DaylightDynamicsState {
         this.config = DaylightDynamicsConfig.defaults();
         this.lastTickNanos = 0L;
         this.customTickAccumulator = 0.0D;
+        this.controlsDaylightRule = false;
+        this.previousDaylightRule = true;
     }
 
     public DaylightDynamicsConfig snapshot() {
@@ -45,16 +51,29 @@ public class DaylightDynamicsState {
 
     public void applyGameRule(MinecraftServer server) {
         if (!config.running()) {
+            restoreGameRule();
             return;
         }
 
+        if (!controlsDaylightRule) {
+            previousDaylightRule = server.overworld().getGameRules().get(GameRules.ADVANCE_TIME);
+            controlsDaylightRule = true;
+        }
+
         boolean daylightCycleEnabled = config.mode() == DaylightDynamicsConfig.Mode.CUSTOM
-                && anySleepingPlayers(server.getOverworld());
-        server.getGameRules().get(GameRules.DO_DAYLIGHT_CYCLE).set(daylightCycleEnabled, server);
+                && anySleepingPlayers(server.overworld());
+        server.overworld().getGameRules().set(GameRules.ADVANCE_TIME, daylightCycleEnabled, server);
     }
 
-    public void tick(ServerWorld world) {
-        if (world.getRegistryKey() != World.OVERWORLD) {
+    public void restoreGameRule() {
+        if (controlsDaylightRule && server != null) {
+            server.overworld().getGameRules().set(GameRules.ADVANCE_TIME, previousDaylightRule, server);
+            controlsDaylightRule = false;
+        }
+    }
+
+    public void tick(ServerLevel world) {
+        if (world.dimension() != Level.OVERWORLD) {
             return;
         }
 
@@ -65,7 +84,7 @@ public class DaylightDynamicsState {
         if (config.mode() == DaylightDynamicsConfig.Mode.CUSTOM) {
             boolean someoneSleeping = anySleepingPlayers(world);
             if (server != null) {
-                server.getGameRules().get(GameRules.DO_DAYLIGHT_CYCLE).set(someoneSleeping, server);
+                world.getGameRules().set(GameRules.ADVANCE_TIME, someoneSleeping, server);
             }
             if (someoneSleeping) {
                 return;
@@ -74,8 +93,10 @@ public class DaylightDynamicsState {
 
         if (config.mode() == DaylightDynamicsConfig.Mode.TIMEZONE) {
             long target = computeTimezoneDayTime();
-            if (world.getTimeOfDay() % DAY_TICKS != target) {
-                world.setTimeOfDay(world.getTimeOfDay() - (world.getTimeOfDay() % DAY_TICKS) + target);
+            long current = world.getDayTime();
+            long currentTimeOfDay = Math.floorMod(current, DAY_TICKS);
+            if (currentTimeOfDay != target) {
+                world.setDayTime(current - currentTimeOfDay + target);
             }
             return;
         }
@@ -95,7 +116,7 @@ public class DaylightDynamicsState {
         customTickAccumulator += elapsedSeconds * ticksPerRealSecond();
         long wholeTicks = extractWholeTicks(customTickAccumulator);
         if (wholeTicks != 0L) {
-            world.setTimeOfDay(world.getTimeOfDay() + wholeTicks);
+            world.setDayTime(world.getDayTime() + wholeTicks);
             customTickAccumulator -= wholeTicks;
         }
     }
@@ -136,12 +157,12 @@ public class DaylightDynamicsState {
         return 0L;
     }
 
-    private static boolean anySleepingPlayers(ServerWorld world) {
+    private static boolean anySleepingPlayers(ServerLevel world) {
         if (world == null) {
             return false;
         }
 
-        for (ServerPlayerEntity player : world.getPlayers()) {
+        for (ServerPlayer player : world.players()) {
             if (player.isSleeping()) {
                 return true;
             }

@@ -2,131 +2,102 @@ package com.cookiecraftmods.timeadjustmentmod.network;
 
 import com.cookiecraftmods.timeadjustmentmod.DaylightDynamicsConfig;
 import com.cookiecraftmods.timeadjustmentmod.DaylightDynamicsMod;
-import com.cookiecraftmods.timeadjustmentmod.client.ClientState;
-import com.cookiecraftmods.timeadjustmentmod.client.DaylightDynamicsScreen;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.Identifier;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.permissions.Permissions;
+import net.neoforged.neoforge.client.network.ClientPacketDistributor;
+import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+
+import java.util.function.Consumer;
 
 public final class DaylightDynamicsNetwork {
-    private static final Identifier OPEN_SCREEN = Identifier.of(DaylightDynamicsMod.MOD_ID, "open_screen");
-    private static final Identifier SYNC_STATE = Identifier.of(DaylightDynamicsMod.MOD_ID, "sync_state");
-    private static final Identifier UPDATE_SETTINGS = Identifier.of(DaylightDynamicsMod.MOD_ID, "update_settings");
+    private static final String PROTOCOL_VERSION = "1";
+    private static Consumer<DaylightDynamicsConfig> openScreenHandler = config -> { };
+    private static Consumer<DaylightDynamicsConfig> syncStateHandler = config -> { };
 
     private DaylightDynamicsNetwork() {
     }
 
-    public static void registerPayloads() {
-        PayloadTypeRegistry.playS2C().register(OpenScreenPayload.ID, OpenScreenPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(SyncStatePayload.ID, SyncStatePayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(UpdateSettingsPayload.ID, UpdateSettingsPayload.CODEC);
+    public static void registerPayloads(RegisterPayloadHandlersEvent event) {
+        var registrar = event.registrar(PROTOCOL_VERSION);
+        registrar.playToClient(OpenScreenPayload.TYPE, OpenScreenPayload.STREAM_CODEC,
+                (payload, context) -> openScreenHandler.accept(payload.config()));
+        registrar.playToClient(SyncStatePayload.TYPE, SyncStatePayload.STREAM_CODEC,
+                (payload, context) -> syncStateHandler.accept(payload.config()));
+        registrar.playToServer(UpdateSettingsPayload.TYPE, UpdateSettingsPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    if (context.player() instanceof ServerPlayer player
+                            && player.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER)) {
+                        DaylightDynamicsMod.state().update(payload.config());
+                    }
+                });
     }
 
-    public static void registerServer() {
-        ServerPlayNetworking.registerGlobalReceiver(UpdateSettingsPayload.ID, (payload, context) -> {
-            if (!context.player().hasPermissionLevel(2)) {
-                return;
-            }
-
-            DaylightDynamicsMod.state().update(payload.config());
-        });
+    public static void installClientHandlers(
+            Consumer<DaylightDynamicsConfig> openScreen,
+            Consumer<DaylightDynamicsConfig> syncState
+    ) {
+        openScreenHandler = openScreen;
+        syncStateHandler = syncState;
     }
 
-    public static void registerClient() {
-        ClientPlayNetworking.registerGlobalReceiver(OpenScreenPayload.ID, (payload, context) -> {
-            DaylightDynamicsConfig config = payload.config();
-            var client = context.client();
-            client.execute(() -> {
-                ClientState.setConfig(config);
-                client.setScreen(new DaylightDynamicsScreen(config));
-            });
-        });
-        ClientPlayNetworking.registerGlobalReceiver(SyncStatePayload.ID, (payload, context) -> {
-            DaylightDynamicsConfig config = payload.config();
-            var client = context.client();
-            client.execute(() -> {
-                ClientState.setConfig(config);
-                if (client.currentScreen instanceof DaylightDynamicsScreen screen) {
-                    screen.refreshFromServer(config);
-                }
-            });
-        });
+    public static void openScreen(ServerPlayer player, DaylightDynamicsConfig config) {
+        PacketDistributor.sendToPlayer(player, new OpenScreenPayload(config.sanitize()));
     }
 
-    public static void openScreen(ServerPlayerEntity player, DaylightDynamicsConfig config) {
-        if (!ServerPlayNetworking.canSend(player, OpenScreenPayload.ID)) {
-            return;
-        }
-
-        ServerPlayNetworking.send(player, new OpenScreenPayload(config.sanitize()));
-    }
-
-    public static void syncToPlayer(ServerPlayerEntity player, DaylightDynamicsConfig config) {
-        if (!ServerPlayNetworking.canSend(player, SyncStatePayload.ID)) {
-            return;
-        }
-
-        ServerPlayNetworking.send(player, new SyncStatePayload(config.sanitize()));
+    public static void syncToPlayer(ServerPlayer player, DaylightDynamicsConfig config) {
+        PacketDistributor.sendToPlayer(player, new SyncStatePayload(config.sanitize()));
     }
 
     public static void broadcastState(MinecraftServer server, DaylightDynamicsConfig config) {
-        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             syncToPlayer(player, config);
         }
     }
 
     public static void sendUpdate(DaylightDynamicsConfig config) {
-        ClientPlayNetworking.send(new UpdateSettingsPayload(config.sanitize()));
+        ClientPacketDistributor.sendToServer(new UpdateSettingsPayload(config.sanitize()));
     }
 
-    public record OpenScreenPayload(DaylightDynamicsConfig config) implements CustomPayload {
-        public static final Id<OpenScreenPayload> ID = new Id<>(OPEN_SCREEN);
-        public static final net.minecraft.network.codec.PacketCodec<RegistryByteBuf, OpenScreenPayload> CODEC =
-                net.minecraft.network.codec.PacketCodec.tuple(
-                        ConfigPacketCodec.NETWORK_CODEC,
-                        OpenScreenPayload::config,
-                        OpenScreenPayload::new
-                );
+    private static Identifier id(String path) {
+        return Identifier.fromNamespaceAndPath(DaylightDynamicsMod.MOD_ID, path);
+    }
+
+    public record OpenScreenPayload(DaylightDynamicsConfig config) implements CustomPacketPayload {
+        public static final Type<OpenScreenPayload> TYPE = new Type<>(id("open_screen"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, OpenScreenPayload> STREAM_CODEC =
+                StreamCodec.composite(ConfigPacketCodec.STREAM_CODEC, OpenScreenPayload::config, OpenScreenPayload::new);
 
         @Override
-        public Id<? extends CustomPayload> getId() {
-            return ID;
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
         }
     }
 
-    public record SyncStatePayload(DaylightDynamicsConfig config) implements CustomPayload {
-        public static final Id<SyncStatePayload> ID = new Id<>(SYNC_STATE);
-        public static final net.minecraft.network.codec.PacketCodec<RegistryByteBuf, SyncStatePayload> CODEC =
-                net.minecraft.network.codec.PacketCodec.tuple(
-                        ConfigPacketCodec.NETWORK_CODEC,
-                        SyncStatePayload::config,
-                        SyncStatePayload::new
-                );
+    public record SyncStatePayload(DaylightDynamicsConfig config) implements CustomPacketPayload {
+        public static final Type<SyncStatePayload> TYPE = new Type<>(id("sync_state"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, SyncStatePayload> STREAM_CODEC =
+                StreamCodec.composite(ConfigPacketCodec.STREAM_CODEC, SyncStatePayload::config, SyncStatePayload::new);
 
         @Override
-        public Id<? extends CustomPayload> getId() {
-            return ID;
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
         }
     }
 
-    public record UpdateSettingsPayload(DaylightDynamicsConfig config) implements CustomPayload {
-        public static final Id<UpdateSettingsPayload> ID = new Id<>(UPDATE_SETTINGS);
-        public static final net.minecraft.network.codec.PacketCodec<RegistryByteBuf, UpdateSettingsPayload> CODEC =
-                net.minecraft.network.codec.PacketCodec.tuple(
-                        ConfigPacketCodec.NETWORK_CODEC,
-                        UpdateSettingsPayload::config,
-                        UpdateSettingsPayload::new
-                );
+    public record UpdateSettingsPayload(DaylightDynamicsConfig config) implements CustomPacketPayload {
+        public static final Type<UpdateSettingsPayload> TYPE = new Type<>(id("update_settings"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, UpdateSettingsPayload> STREAM_CODEC =
+                StreamCodec.composite(ConfigPacketCodec.STREAM_CODEC, UpdateSettingsPayload::config, UpdateSettingsPayload::new);
 
         @Override
-        public Id<? extends CustomPayload> getId() {
-            return ID;
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
         }
     }
 }
