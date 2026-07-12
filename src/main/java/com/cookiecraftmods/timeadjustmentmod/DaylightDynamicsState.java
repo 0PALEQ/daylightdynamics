@@ -3,7 +3,6 @@ package com.cookiecraftmods.timeadjustmentmod;
 import com.cookiecraftmods.timeadjustmentmod.network.DaylightDynamicsNetwork;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.gamerules.GameRules;
 
@@ -12,19 +11,20 @@ import java.time.ZonedDateTime;
 
 public class DaylightDynamicsState {
     public static final long DAY_TICKS = 24000L;
+    private static final float GAME_TICKS_PER_SECOND = 20.0F;
+    private static final float REALTIME_DAY_TIME_PER_TICK =
+            DAY_TICKS / (24.0F * 60.0F * 60.0F * GAME_TICKS_PER_SECOND);
 
     private MinecraftServer server;
     private DaylightDynamicsConfig config = DaylightDynamicsConfig.defaults();
-    private long lastTickNanos;
-    private double customTickAccumulator;
+    private boolean timezoneAligned;
     private boolean controlsDaylightRule;
     private boolean previousDaylightRule;
 
     public void load(MinecraftServer server) {
         this.server = server;
         this.config = DaylightDynamicsConfig.load(server);
-        this.lastTickNanos = 0L;
-        this.customTickAccumulator = 0.0D;
+        this.timezoneAligned = false;
         this.controlsDaylightRule = false;
         this.previousDaylightRule = server.overworld().getGameRules().get(GameRules.ADVANCE_TIME);
     }
@@ -32,8 +32,7 @@ public class DaylightDynamicsState {
     public void unload() {
         this.server = null;
         this.config = DaylightDynamicsConfig.defaults();
-        this.lastTickNanos = 0L;
-        this.customTickAccumulator = 0.0D;
+        this.timezoneAligned = false;
         this.controlsDaylightRule = false;
         this.previousDaylightRule = true;
     }
@@ -44,8 +43,7 @@ public class DaylightDynamicsState {
 
     public void update(DaylightDynamicsConfig newConfig) {
         config = newConfig.copy().sanitize();
-        lastTickNanos = 0L;
-        customTickAccumulator = 0.0D;
+        timezoneAligned = false;
         persistAndSync();
     }
 
@@ -60,14 +58,16 @@ public class DaylightDynamicsState {
             controlsDaylightRule = true;
         }
 
-        boolean daylightCycleEnabled = config.mode() == DaylightDynamicsConfig.Mode.CUSTOM
-                && anySleepingPlayers(server.overworld());
-        server.overworld().getGameRules().set(GameRules.ADVANCE_TIME, daylightCycleEnabled, server);
+        ServerLevel overworld = server.overworld();
+        overworld.getGameRules().set(GameRules.ADVANCE_TIME, true, server);
+        overworld.setDayTimePerTick(dayTimePerGameTick());
     }
 
     public void restoreGameRule() {
         if (controlsDaylightRule && server != null) {
-            server.overworld().getGameRules().set(GameRules.ADVANCE_TIME, previousDaylightRule, server);
+            ServerLevel overworld = server.overworld();
+            overworld.setDayTimePerTick(-1.0F);
+            overworld.getGameRules().set(GameRules.ADVANCE_TIME, previousDaylightRule, server);
             controlsDaylightRule = false;
         }
     }
@@ -81,43 +81,21 @@ public class DaylightDynamicsState {
             return;
         }
 
-        if (config.mode() == DaylightDynamicsConfig.Mode.CUSTOM) {
-            boolean someoneSleeping = anySleepingPlayers(world);
-            if (server != null) {
-                world.getGameRules().set(GameRules.ADVANCE_TIME, someoneSleeping, server);
-            }
-            if (someoneSleeping) {
-                return;
-            }
-        }
-
         if (config.mode() == DaylightDynamicsConfig.Mode.TIMEZONE) {
             long target = computeTimezoneDayTime();
             long current = world.getDayTime();
             long currentTimeOfDay = Math.floorMod(current, DAY_TICKS);
-            if (currentTimeOfDay != target) {
-                world.setDayTime(current - currentTimeOfDay + target);
+            if (!timezoneAligned) {
+                world.setDayTime(current + Math.floorMod(target - currentTimeOfDay, DAY_TICKS));
+                timezoneAligned = true;
+                return;
             }
-            return;
-        }
 
-        long now = System.nanoTime();
-        if (lastTickNanos == 0L) {
-            lastTickNanos = now;
-            return;
-        }
-
-        double elapsedSeconds = (now - lastTickNanos) / 1_000_000_000.0D;
-        lastTickNanos = now;
-        if (elapsedSeconds <= 0.0D) {
-            return;
-        }
-
-        customTickAccumulator += elapsedSeconds * ticksPerRealSecond();
-        long wholeTicks = extractWholeTicks(customTickAccumulator);
-        if (wholeTicks != 0L) {
-            world.setDayTime(world.getDayTime() + wholeTicks);
-            customTickAccumulator -= wholeTicks;
+            long drift = Math.floorMod(target - currentTimeOfDay + (DAY_TICKS / 2L), DAY_TICKS)
+                    - (DAY_TICKS / 2L);
+            if (Math.abs(drift) > 2L) {
+                world.setDayTime(current + drift);
+            }
         }
     }
 
@@ -131,9 +109,12 @@ public class DaylightDynamicsState {
         DaylightDynamicsNetwork.broadcastState(server, config);
     }
 
-    private double ticksPerRealSecond() {
-        double realSeconds = Math.max(1, config.customDayLengthMinutes()) * 60.0D;
-        return DAY_TICKS / realSeconds;
+    private float dayTimePerGameTick() {
+        if (config.mode() == DaylightDynamicsConfig.Mode.TIMEZONE) {
+            return REALTIME_DAY_TIME_PER_TICK;
+        }
+        float realSeconds = Math.max(1, config.customDayLengthMinutes()) * 60.0F;
+        return DAY_TICKS / (realSeconds * GAME_TICKS_PER_SECOND);
     }
 
     private long computeTimezoneDayTime() {
@@ -145,28 +126,4 @@ public class DaylightDynamicsState {
         return Math.floorMod((long) Math.floor(gameTicks - sunriseOffset), DAY_TICKS);
     }
 
-    private static long extractWholeTicks(double accumulator) {
-        if (accumulator >= 1.0D) {
-            return (long) Math.floor(accumulator);
-        }
-
-        if (accumulator <= -1.0D) {
-            return (long) Math.ceil(accumulator);
-        }
-
-        return 0L;
-    }
-
-    private static boolean anySleepingPlayers(ServerLevel world) {
-        if (world == null) {
-            return false;
-        }
-
-        for (ServerPlayer player : world.players()) {
-            if (player.isSleeping()) {
-                return true;
-            }
-        }
-        return false;
-    }
 }

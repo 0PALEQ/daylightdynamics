@@ -9,7 +9,6 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
-import net.neoforged.neoforge.client.event.ClientTickEvent;
 
 public final class DaylightDynamicsClient {
     private DaylightDynamicsClient() {
@@ -32,11 +31,6 @@ public final class DaylightDynamicsClient {
     @EventBusSubscriber(modid = DaylightDynamicsMod.MOD_ID, value = Dist.CLIENT)
     public static final class GameEvents {
         private GameEvents() {
-        }
-
-        @SubscribeEvent
-        public static void onClientTick(ClientTickEvent.Post event) {
-            ClientTimeController.tick(Minecraft.getInstance());
         }
 
         @SubscribeEvent
