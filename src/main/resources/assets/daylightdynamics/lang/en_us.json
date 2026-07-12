@@ -1,0 +1,5 @@
+{
+  "gamerule.daylightdynamics.daylightDynamicsRunning": "Daylight Dynamics Enabled",
+  "gamerule.daylightdynamics.daylightDynamicsRealtime": "Daylight Dynamics Timezone Mode",
+  "gamerule.daylightdynamics.daylightDynamicsDayLengthMinutes": "Daylight Dynamics Day Length Minutes"
+}
